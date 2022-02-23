@@ -2,8 +2,8 @@
 module Parsers where
 import Control.Applicative
 import Data.Char
-import Environment ( Env (..), VarType (..), Variable (..), modifyEnv, searchVariableValue, array, removeFromEnv, record, searchVariable, setValue )
-import Distribution.Simple.Utils (xargs)
+import Environment ( Env (..), VarType (..), Variable (..),
+    modifyEnv, searchVariableValue, array, removeFromEnv, record, searchVariable, setValue )
 
 -- To allow the Parser type
 newtype Parser a = P (Env -> String -> [(Env, a, String)])
@@ -172,20 +172,16 @@ symbol xs = token (string xs)
 -------------------------------------------------------------------------------------------------------
 -------------------------------------------------------------------------------------------------------
 -- ARRAYS
--- array declaration: contestually assign his elements
--- x := [1,2,3]
--- subcase of the assignment command
--- in the assignment we put a aexp in a identifier
--- we add a special case where we assign to the identifier an array value
--- that is written in  the form of array literal
--- values separated by comma and enclosed in square brackets
--- first of all we need a parser able to recognize an array literal
--- then we need to define how the array literal have to be stored in the environment
--- The last step is to define how to access to an element of the array
-
+-- The syntax for declaration of arrays contestually involves also the assignment
+-- So using, what we call an array literal:
+-- values separated by comma and enclosed in square brackets (somehow like JavaScript)
+-- e.g. x := [1,2,3]
+-- As first step we need parsers able to recognize array literal
+-------------------------------------------------------------------------------------------------------
 -- ARRAYS GRAMMAR
 -- arrayElement ::= <integer> | <integer>, <arrayElement> 
 -- arrayLiteral ::= [ <arrayElement> ]
+-------------------------------------------------------------------------------------------------------
 
 arrayLiteral :: Parser [(Int, Int)]
 arrayLiteral =
@@ -205,6 +201,29 @@ arrayElements =
     <|> do
         x <- integer
         return [x]
+
+-- We also need to recognize the syntax of access to the array,
+-- as access we mean the operation of retrieving a value from an array
+-- given the integer index of the position
+-- GRAMMAR
+-- arrayAccess ::= <identifier> [ <integer> ]
+
+arrayAccess :: Parser (Maybe Int)
+arrayAccess = do
+    i <- identifier
+    symbol "["
+    ind <- integer
+    symbol "]"
+    readVariableValue ("_" ++ i) (show ind)
+
+-------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------
+-- RECORDS
+-- Also for the record we contestually define declaration and assignment.
+-- The syntax for a record literal is specified by the following grammar
+-- recordElement ::= <integer> | <identifier>:<integer>, <recordElement>
+-- recordLiteral ::= { <recordElement> }
+-------------------------------------------------------------------------------------------------------
 
 recordLiteral :: Parser [(String, Int)]
 recordLiteral =
@@ -229,14 +248,6 @@ recordElements =
         v <- integer
         return [(f, v)]
 
-arrayAccess :: Parser (Maybe Int)
-arrayAccess = do
-    i <- identifier
-    symbol "["
-    ind <- integer
-    symbol "]"
-    readVariableValue ("_" ++ i) (show ind)
-
 recordAccess :: Parser (Maybe Int)
 recordAccess = do
     i <- identifier
@@ -249,7 +260,9 @@ recordAccess = do
 -- ARTIHMETIC EXPRESSIONS
 -- aexp        ::= <aterm> + <aexp> | <aterm> - <aexp> | <aterm>
 -- aterm       ::= <afactor> * <aterm> | <afactor> / <aterm> | <afactor>
--- afactor     ::= (<aexp>) | <integer> | <identifier> | <arrayAccess>
+-- afactor     ::= (<aexp>) | <integer> | <identifier> | <arrayAccess> | <recordAccess>
+--
+-- Arithmetic expressions can also involve value retrieved from array and record structures
 --
 -- examples:
 {-
@@ -311,7 +324,9 @@ afactor =
 -- bexp        ::= <bterm> OR <bexp> | <bterm>
 -- bterm       ::= <bfactor> AND <bterm> | <bfactor>
 -- bfactor     ::= true | false | !<bfactor> | (bexp)
--- bcomparison ::= <aexp> = <aexp> | <aexp> ≤ <aexp>
+-- bcomparison ::= <aexp> = <aexp> | <aexp> ≠ <aexp> 
+--                  | <aexp> ≤ <aexp> | <aexp> < <aexp>
+--                  | <aexp> ≥ <aexp> | <aexp> > <aexp>  
 --------------------------------------------------------------
 
 bexp :: Parser Bool
@@ -362,20 +377,45 @@ bcomparison =
         symbol "<="
         a1 <- aexp
         return (a0 <= a1)
+    <|> do
+        a0 <- aexp
+        symbol "<"
+        a1 <- aexp
+        return (a0 < a1)
+    <|> do
+        a0 <- aexp
+        symbol ">="
+        a1 <- aexp
+        return (a0 >= a1)
+    <|> do
+        a0 <- aexp
+        symbol ">"
+        a1 <- aexp
+        return (a0 > a1)
+    <|> do
+        a0 <- aexp
+        symbol "!="
+        a1 <- aexp
+        return (a0 /= a1)
 
 --------------------------------------------------------------
 --------------------------------------------------------------
 -- COMMAND EXPRESSIONS
 -- program     ::= <command> | <command> <program>
 -- command     ::= <assignment> | <ifThenElse> | <while> | skip;
--- assignment  ::= <identifier> := <aexp>;
+--
+-- For the assignment case we also need to deal with
+-- the declaration of array and records and with the setting
+-- of a specific value of said structures
+-- assignment  ::= <identifier> := <aexp>; 
+--                  | <identifier> := <arrayLiteral> | <arrayAccess> := <aexp>
+--                  | <identifier> := recordLiteral  | <recordAccesss> := <aexp>
 -- ifThenElse  ::= if (<bexp>) { <program> } | if (<bexp>) {<program>} else {<program>}
 -- while       ::= while (<bexp>) {<program>}
 --------------------------------------------------------------
 
 program :: Parser String
-program =
-    do
+program = do
         command
         program
     <|> command
@@ -397,20 +437,27 @@ assignment =
         symbol ":="
         v <- aexp
         symbol ";"
-        updateEnv Variable { name = i, value = IntType v }
+        updateEnv Variable { name = i, value = Just (IntType v) }
     <|> do
+
+        -- To store arrays and records we add special cases
+        -- where we assign to the identifier a value
+        -- written as an array literal or as a record literal
         i <- identifier
         symbol ":="
         vs <- arrayLiteral
         symbol ";"
-        updateEnv Variable { name = "_" ++ i, value = array vs }
+        updateEnv Variable { name = "_" ++ i, value = Just (array vs) }
     <|> do
         i <- identifier
         symbol ":="
         vs <- recordLiteral
         symbol ";"
-        updateEnv Variable { name = "__" ++ i, value = record vs }
+        updateEnv Variable { name = "__" ++ i, value = Just (record vs) }
     <|> do
+
+        -- We also add special case for the assignment of an integer valeu to a
+        -- specific element of the structures
         i <- identifier
         symbol "["
         ind <- integer
@@ -418,8 +465,8 @@ assignment =
         symbol ":="
         x <- aexp
         symbol ";"
-        ivars <- readVariable ("_" ++ i)
-        updateEnv Variable { name = "_" ++ i, value = setValue (head ivars) (show ind) x }
+        ivar <- readVariable ("_" ++ i)
+        updateEnv Variable { name = "_" ++ i, value = setValue ivar (show ind) x }
     <|> do
         i <- identifier
         symbol "."
@@ -427,42 +474,38 @@ assignment =
         symbol ":="
         x <- aexp
         symbol ";"
-        ivars <- readVariable ("__" ++ i)
-        updateEnv Variable { name = "__" ++ i, value = setValue (head ivars) field x }
+        ivar <- readVariable ("__" ++ i)
+        updateEnv Variable { name = "__" ++ i, value = setValue ivar field x }
 
 ifThenElse :: Parser String
-ifThenElse =
-    do
-        symbol "if"
-        b <- bexp
-        symbol "{"
-        if b then
-            do
-                program
-                symbol "}"
-                do
-                    symbol "else"
-                    symbol "{"
-                    parseProgram
-                    symbol "}"
-                    return ""
-                <|> return ""
-        else
-            do
-                parseProgram
-                symbol "}"
-                do
-                    symbol "else"
-                    symbol "{"
-                    program
-                    symbol "}"
-                    return ""
-                <|> return ""
+ifThenElse = do symbol "if"
+                b <- bexp
+                symbol "{"
+                if b then
+                    (do program
+                        symbol "}"
+                        (do symbol "else"
+                            symbol "{"
+                            parseProgram;
+                            symbol "}"
+                            return "")
+                           <|>
+                           return "")
+                else
+                    (do parseProgram
+                        symbol "}"
+                        (do symbol "else"
+                            symbol "{"
+                            program
+                            symbol "}"
+                            return "")
+                         <|>
+                         return "")
 
 while :: Parser String
 while = do
     w <- consumeWhile
-    repeatWhile w
+    repeatLoop w
     symbol "while"
     b <- bexp
     symbol "{"
@@ -470,7 +513,7 @@ while = do
         do
             program
             symbol "}"
-            repeatWhile w
+            repeatLoop w
             while
     else
         do
@@ -479,10 +522,18 @@ while = do
             return ""
 
 
+-- Additional construct that allows to iterate over 
+-- an entire array without using integer indexes
+-- e.g.
+-- x := [1, 5, -3. 0];
+-- y := 0;
+-- foreach xi in x { y := y + xi; }
+-- Result: y := 3
+
 foreach :: Parser String
 foreach = do
     w <- consumeForEach
-    repeatWhile w
+    repeatLoop w
 
     -- parse the string until the identifier of the collection 
     symbol "foreach"
@@ -499,10 +550,10 @@ foreach = do
     collection <- readVariable ("_" ++ i)
 
     -- reconstruct the code
-    repeatWhile w
+    repeatLoop w
 
     -- iterate on the collection
-    foreachSteps (head collection)
+    foreachSteps collection
 
     -- remove the element variable from the environment
     updateEnvRemove element
@@ -511,11 +562,12 @@ foreach = do
     consumeForEach
     return ""
 
-foreachSteps :: VarType -> Parser String
-foreachSteps EmptyArray = do return ""
-foreachSteps (ArrayElement index arrayValue xs) = do
+foreachSteps :: Maybe VarType -> Parser String
+foreachSteps Nothing = return ""
+foreachSteps (Just EmptyArray) = return ""
+foreachSteps (Just (ArrayElement index arrayValue xs)) = do
     w <- consumeForEach
-    repeatWhile w
+    repeatLoop w
 
     -- get the identifier of the iterator variable
     symbol "foreach"
@@ -526,30 +578,28 @@ foreachSteps (ArrayElement index arrayValue xs) = do
     identifier
 
     -- add the iterator variable to the environment
-    updateEnv Variable { name = element, value = IntType arrayValue }
+    updateEnv Variable { name = element, value = Just (IntType arrayValue) }
 
     -- execute the loop body
     symbol "{"
     program
     symbol "}"
 
-    -- reconstruct the loop code
-    repeatWhile w
+    -- repeat the loop code
+    repeatLoop w
 
     -- iterate
     foreachSteps xs
 
-repeatWhile :: String -> Parser String
-repeatWhile c = P (\env input -> [(env, "", c ++ input)])
+repeatLoop :: String -> Parser String
+repeatLoop c = P (\env input -> [(env, "", c ++ input)])
 
---------------------------------------------------------------
---------------------------------------------------------------
+--------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------
 -- PARSERS THAT CONSUME STRINGS WITHOUT EVALUATING
+--------------------------------------------------------------------------------------
 
--- Aexps
--- aexp        ::= <aterm> + <aexp> | <aterm> - <aexp> | <aterm>
--- aterm       ::= <afactor> * <aterm> | <afactor> / <aterm> / <afactor>
--- afactor     ::= (<aexp>) | <integer> | <identifier
+-- Arithmetic expressions
 consumeAexp :: Parser String
 consumeAexp =
     do
@@ -595,11 +645,7 @@ consumeAfactor =
     <|> do
         show <$> integer
 
--- Bexps
--- bexp        ::= <bterm> OR <bexp> | <bterm>
--- bterm       ::= <bfactor> AND <bterm> | <bfactor>
--- bfactor     ::= true | false | !<bfactor> | (bexp) | <bcomparison>
--- bcomparison ::= <aexp> = <aexp> | <aexp> ≤ <aexp>
+-- Boolean expressions
 
 consumeBexp :: Parser String
 consumeBexp =
@@ -638,19 +684,13 @@ consumeBfactor =
         return ("(" ++ b ++ ")")
     <|> consumeBcomparison
 
--- bcomparison ::= <aexp> = <aexp> | <aexp> ≤ <aexp>
 consumeBcomparison :: Parser String
 consumeBcomparison =
     do
         a0 <- consumeAexp
-        symbol "="
+        sym <- symbol "=" <|> symbol "<=" <|> symbol "<" <|> symbol ">=" <|> symbol ">" <|> symbol "/="
         a1 <- consumeAexp
-        return (a0 ++ "=" ++ a1)
-    <|> do
-        a0 <- consumeAexp
-        symbol "<="
-        a1 <- consumeAexp
-        return (a0 ++ "<=" ++ a1)
+        return (a0 ++ sym ++ a1)
 
 consumeArrayLiteral :: Parser String
 consumeArrayLiteral =
@@ -699,11 +739,6 @@ consumeRecordAccess = do
     return (i ++ "." ++ field)
 
 -- Commands
--- program     ::= <command> <program> | <command>
--- command     ::= <assignment> | <ifThenElse> | <while> | skip;
--- assignment  ::= <identifier> := <aexp>;
--- ifThenElse  ::= if (<bexp>) { <program> } | if (<bexp>) {<program>} else {<program>}
--- while       ::= while (<bexp>) {<program>}
 
 parseProgram :: Parser String
 parseProgram =
@@ -794,23 +829,23 @@ updateEnv var = P(
             xs -> [(modifyEnv env var, "", xs)])
 
 -- Remove a variable from the environment
--- It's useful to limit the scope of a variable
+-- It's useful to limit the scope of a variable, 
+-- for example it is used in the implementation of the foreach construct
 -- If the variable does not exist no changes will be executed
 updateEnvRemove :: String -> Parser String
 updateEnvRemove var = P(
         \env input -> case input of
             xs -> [(removeFromEnv env var, "", xs)])
 
--- Return the value of a variable given the name
+-- Return the integer value of a variable given the name
 readVariableValue :: String -> String -> Parser (Maybe Int)
 readVariableValue name searchField = P(
     \env input -> case searchVariableValue env name searchField of
         Nothing -> []
         value -> [(env, value, input)])
 
--- Return a variable structure given the name
-readVariable :: String -> Parser [VarType]
+-- Return a variable value in the VarType recursive structure given the name
+readVariable :: String -> Parser (Maybe VarType)
 readVariable name = P(
     \env input -> case searchVariable env name of
-        [] -> []
-        values -> [(env, values, input)])
+        value -> [(env, value, input)])
