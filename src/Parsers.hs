@@ -2,7 +2,7 @@
 module Parsers where
 import Control.Applicative
 import Data.Char
-import Environment ( Env (..), VarType (..), Variable (..), modifyEnv, searchVariable, array, removeFromEnv, record )
+import Environment ( Env (..), VarType (..), Variable (..), modifyEnv, searchVariableValue, array, removeFromEnv, record, searchVariable, setValue )
 import Distribution.Simple.Utils (xargs)
 
 -- To allow the Parser type
@@ -187,13 +187,13 @@ symbol xs = token (string xs)
 -- arrayElement ::= <integer> | <integer>, <arrayElement> 
 -- arrayLiteral ::= [ <arrayElement> ]
 
-arrayLiteral :: Parser [Int]
+arrayLiteral :: Parser [(Int, Int)]
 arrayLiteral =
     do
         symbol "["
-        xs <- arrayElements
+        es <- arrayElements
         symbol "]"
-        return xs
+        return (zip [0..] es)
 
 arrayElements :: Parser [Int]
 arrayElements =
@@ -215,7 +215,7 @@ recordLiteral =
         return xs
 
 recordElements :: Parser [(String, Int)]
-recordElements = 
+recordElements =
     do
         f <- identifier
         symbol ":"
@@ -228,23 +228,21 @@ recordElements =
         symbol ":"
         v <- integer
         return [(f, v)]
-        
-arrayAccess :: Parser Int
+
+arrayAccess :: Parser (Maybe Int)
 arrayAccess = do
     i <- identifier
     symbol "["
     ind <- integer
     symbol "]"
-    vs <- readVariable ("_" ++ i) ""
-    return (vs !! ind)
+    readVariableValue ("_" ++ i) (show ind)
 
-recordAccess :: Parser Int
+recordAccess :: Parser (Maybe Int)
 recordAccess = do
     i <- identifier
     symbol "."
     field <- identifier
-    vs <- readVariable ("_" ++ i) field
-    return (head vs) 
+    readVariableValue ("__" ++ i) field
 
 --------------------------------------------------------------
 --------------------------------------------------------------
@@ -265,35 +263,35 @@ recordAccess = do
 -}
 --------------------------------------------------------------
 
-aexp :: Parser Int
+aexp :: Parser (Maybe Int)
 aexp =
     do
         t <- aterm
         symbol "+"
         a <- aexp
-        return (t + a)
+        return ((+) <$> t <*> a)
     <|> do
         t <- aterm
         symbol "-"
         a <- aexp
-        return (t - a)
+        return ((-) <$> t <*> a)
     <|> aterm
 
-aterm :: Parser Int
+aterm :: Parser (Maybe Int)
 aterm =
     do
         f <- afactor
         symbol "*"
         t <- aterm
-        return (t * f)
+        return ((*) <$> t <*> f)
     <|> do
         f <- afactor
         symbol "/"
         t <- aterm
-        return (f `div` t)
+        return (div <$> t <*> f)
     <|> afactor
 
-afactor :: Parser Int
+afactor :: Parser (Maybe Int)
 afactor =
     do
         symbol "("
@@ -302,11 +300,10 @@ afactor =
         return a
     <|> do
         i <- identifier
-        vs <- readVariable i ""
-        return (head vs)
+        readVariableValue i ""
     <|> arrayAccess
     <|> recordAccess
-    <|> integer
+    <|> do Just <$> integer
 
 --------------------------------------------------------------
 --------------------------------------------------------------
@@ -396,23 +393,42 @@ command =
 assignment :: Parser String
 assignment =
     do
-        x <- identifier
+        i <- identifier
         symbol ":="
         v <- aexp
         symbol ";"
-        updateEnv Variable { name = x, value = IntType v }
+        updateEnv Variable { name = i, value = IntType v }
     <|> do
-        x <- identifier
+        i <- identifier
         symbol ":="
         vs <- arrayLiteral
         symbol ";"
-        updateEnv Variable { name = "_" ++ x, value = array vs }
+        updateEnv Variable { name = "_" ++ i, value = array vs }
     <|> do
-        x <- identifier
+        i <- identifier
         symbol ":="
         vs <- recordLiteral
         symbol ";"
-        updateEnv Variable { name = "_" ++ x, value = record vs }
+        updateEnv Variable { name = "__" ++ i, value = record vs }
+    <|> do
+        i <- identifier
+        symbol "["
+        ind <- integer
+        symbol "]"
+        symbol ":="
+        x <- aexp
+        symbol ";"
+        ivars <- readVariable ("_" ++ i)
+        updateEnv Variable { name = "_" ++ i, value = setValue (head ivars) (show ind) x }
+    <|> do
+        i <- identifier
+        symbol "."
+        field <- identifier
+        symbol ":="
+        x <- aexp
+        symbol ";"
+        ivars <- readVariable ("__" ++ i)
+        updateEnv Variable { name = "__" ++ i, value = setValue (head ivars) field x }
 
 ifThenElse :: Parser String
 ifThenElse =
@@ -467,7 +483,7 @@ foreach :: Parser String
 foreach = do
     w <- consumeForEach
     repeatWhile w
-    
+
     -- parse the string until the identifier of the collection 
     symbol "foreach"
     element <- identifier
@@ -480,13 +496,13 @@ foreach = do
     symbol "}"
 
     -- store the value of the collection to iterate
-    collection <- readVariable ("_" ++ i) ""
+    collection <- readVariable ("_" ++ i)
 
     -- reconstruct the code
     repeatWhile w
 
     -- iterate on the collection
-    foreachSteps collection
+    foreachSteps (head collection)
 
     -- remove the element variable from the environment
     updateEnvRemove element
@@ -495,9 +511,9 @@ foreach = do
     consumeForEach
     return ""
 
-foreachSteps :: [Int] -> Parser String
-foreachSteps [] = do return ""
-foreachSteps (x:xs) = do
+foreachSteps :: VarType -> Parser String
+foreachSteps EmptyArray = do return ""
+foreachSteps (ArrayElement index arrayValue xs) = do
     w <- consumeForEach
     repeatWhile w
 
@@ -510,7 +526,7 @@ foreachSteps (x:xs) = do
     identifier
 
     -- add the iterator variable to the environment
-    updateEnv Variable { name = element, value = IntType x }
+    updateEnv Variable { name = element, value = IntType arrayValue }
 
     -- execute the loop body
     symbol "{"
@@ -673,7 +689,7 @@ consumeRecordElements =
         field <- identifier
         symbol ":"
         value <- integer
-        return (field ++ ":" ++ show value)   
+        return (field ++ ":" ++ show value)
 
 consumeRecordAccess :: Parser String
 consumeRecordAccess = do
@@ -716,6 +732,23 @@ consumeAssignment =
         a <- consumeAexp <|> consumeArrayLiteral <|> consumeRecordLiteral
         symbol ";"
         return (x ++ ":=" ++ a ++ ";")
+    <|> do
+        i <- identifier
+        symbol "["
+        ind <- integer
+        symbol "]"
+        symbol ":="
+        x <- consumeAexp
+        symbol ";"
+        return (i ++ "[" ++ show ind ++ "] := " ++ x ++ ";")
+    <|> do
+        i <- identifier
+        symbol "."
+        field <- identifier
+        symbol ":="
+        x <- consumeAexp
+        symbol ";"
+        return (i ++ "." ++ field ++ " := " ++ x ++ ";")
 
 consumeIfThenElse :: Parser String
 consumeIfThenElse = do
@@ -769,8 +802,15 @@ updateEnvRemove var = P(
             xs -> [(removeFromEnv env var, "", xs)])
 
 -- Return the value of a variable given the name
-readVariable :: String -> String -> Parser [Int]
-readVariable name searchField = P(
-    \env input -> case searchVariable env name searchField of
+readVariableValue :: String -> String -> Parser (Maybe Int)
+readVariableValue name searchField = P(
+    \env input -> case searchVariableValue env name searchField of
+        Nothing -> []
+        value -> [(env, value, input)])
+
+-- Return a variable structure given the name
+readVariable :: String -> Parser [VarType]
+readVariable name = P(
+    \env input -> case searchVariable env name of
         [] -> []
         values -> [(env, values, input)])
