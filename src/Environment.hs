@@ -121,3 +121,18 @@ searchVariable [] queryname = Nothing
 searchVariable (x : xs) queryname
   | name x == queryname = value x
   | otherwise = searchVariable xs queryname
+
+variableToString :: Maybe VarType -> String
+
+variableToString Nothing = ""
+variableToString (Just (IntType (Just n))) = show n
+
+variableToString (Just EmptyArray) = ""
+variableToString (Just (ArrayElement index (Just value) xs)) = show value ++ " " ++ variableToString xs
+
+variableToString (Just EmptyRecord) = ""
+variableToString (Just (RecordElement field (Just value) xs)) = field ++ ": " ++ show value ++ " " ++ variableToString xs
+
+envToString :: Env -> String
+envToString [] = ""
+envToString (x:xs) = name x ++ ": " ++ variableToString (value x) ++ "\n\n" ++ envToString xs

@@ -66,9 +66,8 @@ instance Alternative Parser where
 satisfy :: (Char -> Bool) -> Parser Char
 satisfy p = do
     -- item :: Parser Char
-    -- x <- item is a function from char to Parser Char
     x <- item
-    if p x then return x else empty -- Parser Char
+    if p x then return x else empty
 
 -- Using satisfy for appropriate predicates from the lib. Data.Char, we can
 --  now define parsers for single digits, lower-case letters, upper-case letters,
@@ -248,6 +247,9 @@ recordElements =
         v <- integer
         return [(f, v)]
 
+-- Also for the records we need an access operator
+-- In this case it is based on the dot notation
+-- recordAccess ::= <identifier>.<identifier>
 recordAccess :: Parser (Maybe Int)
 recordAccess = do
     i <- identifier
@@ -412,6 +414,7 @@ bcomparison =
 --                  | <identifier> := recordLiteral  | <recordAccesss> := <aexp>
 -- ifThenElse  ::= if (<bexp>) { <program> } | if (<bexp>) {<program>} else {<program>}
 -- while       ::= while (<bexp>) {<program>}
+-- foreach     ::= foreach <identifier> in <identifier> {<program>}
 --------------------------------------------------------------
 
 program :: Parser String
@@ -525,7 +528,7 @@ while = do
 -- Additional construct that allows to iterate over 
 -- an entire array without using integer indexes
 -- e.g.
--- x := [1, 5, -3. 0];
+-- x := [1, 5, -3, 0];
 -- y := 0;
 -- foreach xi in x { y := y + xi; }
 -- Result: y := 3

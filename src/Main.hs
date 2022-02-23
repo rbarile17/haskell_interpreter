@@ -2,7 +2,7 @@
 module Main where
 import System.IO
 import Parsers ( parse, program, parseProgram )
-import Environment ( Env, Variable(name, value) )
+import Environment ( Env, Variable(name, value), envToString )
 
 --------------------------------------------------------------
 --------------------------------------------------------------
@@ -39,9 +39,7 @@ exec [(env, parsedString, leftString)] = (
 
 getMemory :: [(Env, String, String)] -> String
 getMemory [] = "Invalid input\n"
-getMemory [(x:xs, parsedString, "")] =
-    "Integer: " ++ name x ++ " = " ++ show (value x) ++ "\n" ++ 
-    getMemory [(xs, parsedString, "")]
+getMemory [(env, parsedString, "")] = envToString env
 
 getMemory [(env, parsedString, leftString)] = case leftString of
     "" -> ""
