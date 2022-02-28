@@ -642,9 +642,9 @@ consumeAfactor =
         symbol "-"
         f <- consumeAfactor
         return ("-" ++ f)
-    <|> identifier
     <|> consumeArrayAccess
     <|> consumeRecordAccess
+    <|> identifier
     <|> do
         show <$> integer
 
